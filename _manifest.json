@@ -1,0 +1,44 @@
+{
+  "manifest_version": 2,
+  "id": "github.eoeoy.diceframe-bridge",
+  "version": "0.1.1",
+  "name": "DiceFrame Bridge",
+  "description": "将 MaiBot 聊天流桥接到 DiceFrame 跑团服务，支持群聊绑定、角色认领、行动提交、掷骰确认、前情、地图、状态、支付和 GM 推进。",
+  "author": {
+    "name": "EOEOY",
+    "url": "https://github.com/EOEOY"
+  },
+  "license": "AGPL-3.0-or-later",
+  "urls": {
+    "repository": "https://github.com/EOEOY/diceframe-bridge",
+    "homepage": "https://github.com/diceframe/diceframe",
+    "documentation": "https://github.com/EOEOY/diceframe-bridge/blob/main/README.md",
+    "issues": "https://github.com/EOEOY/diceframe-bridge/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.99.99"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "plugin_type": "integration",
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "aiohttp",
+      "version_spec": ">=3.9,<4"
+    }
+  ],
+  "capabilities": [
+    "send.text",
+    "config.get"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  }
+}
