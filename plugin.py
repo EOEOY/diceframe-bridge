@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import re
-import sys
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, ClassVar
 from urllib.parse import quote, urlencode, urlparse, urlunparse
 
@@ -44,7 +41,6 @@ class DiceFrameServiceConfig(PluginConfigBase):
     )
     public_base_url: str = Field(default="", description="可选，发给玩家的网页入口地址")
     request_timeout_sec: float = Field(default=120, description="HTTP 请求超时时间")
-    shared_core_path: str = Field(default="", description="可选，DiceFrame 源码根目录；填写后优先复用 src.bots.bridge_core")
 
 
 class CommandConfig(PluginConfigBase):
@@ -55,7 +51,6 @@ class CommandConfig(PluginConfigBase):
     __ui_order__: ClassVar[int] = 2
 
     prefixes: list[str] = Field(default_factory=lambda: ["/df", "/diceframe", "跑团"], description="命令前缀")
-    trigger_mode: str = Field(default="prefix_only", description="触发模式：prefix_only / mention_bare / prefix_or_mention / bare")
     allow_mentioned_bare_commands: bool = Field(default=False, description="兼容旧用法：允许 @MaiBot 后发送裸 DiceFrame 指令")
     require_mention_for_bare_commands: bool = Field(default=True, description="旧兼容项：裸指令是否必须来自 @/提到 MaiBot 的消息")
     command_dedup_window_sec: float = Field(default=3, description="同一聊天流同一用户重复命令忽略窗口")
@@ -309,65 +304,9 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
 
     async def _init_runtime(self) -> None:
         data_dir = Path(getattr(self.ctx.paths, "data_dir", Path(".")))
-        shared = self._load_shared_core()
-        if shared is not None:
-            self._shared_core = shared
-            self._store = shared.JsonBridgeStore(data_dir / "diceframe_bridge_sessions.json")
-            await self._store.load()
-            self._client = shared.DiceFrameClient(
-                self.config.diceframe.base_url,
-                self.config.diceframe.bot_token,
-                self.config.diceframe.request_timeout_sec,
-            )
-            self._bridge_service = shared.DiceFrameBridgeService(
-                self._client,
-                self._store,
-                shared.BridgeServiceConfig(
-                    trigger=shared.TriggerConfig(
-                        prefixes=tuple(self.config.commands.prefixes or ["/df", "/diceframe", "跑团"]),
-                        mode=self._trigger_mode(),
-                    ),
-                    command_dedup_window_sec=self.config.commands.command_dedup_window_sec,
-                    max_reply_chars=self.config.commands.max_reply_chars,
-                    public_base_url=self.config.diceframe.public_base_url,
-                    action_source="maibot",
-                    advance_allowed_users={str(item) for item in self.config.commands.advance_allowed_users},
-                ),
-            )
-            return
-
-        self._shared_core = None
-        self._bridge_service = None
         self._store = BridgeStore(data_dir / "diceframe_bridge_sessions.json")
         await self._store.load()
         self._client = self._build_client()
-
-    def _load_shared_core(self) -> SimpleNamespace | None:
-        core_path = str(self.config.diceframe.shared_core_path or "").strip()
-        if core_path and core_path not in sys.path:
-            sys.path.insert(0, core_path)
-        try:
-            client_mod = importlib.import_module("src.bots.bridge_core.client")
-            models_mod = importlib.import_module("src.bots.bridge_core.models")
-            service_mod = importlib.import_module("src.bots.bridge_core.service")
-            store_mod = importlib.import_module("src.bots.bridge_core.store")
-            triggers_mod = importlib.import_module("src.bots.bridge_core.triggers")
-        except Exception:
-            return None
-        return SimpleNamespace(
-            BridgeInput=models_mod.BridgeInput,
-            BridgeServiceConfig=service_mod.BridgeServiceConfig,
-            DiceFrameBridgeService=service_mod.DiceFrameBridgeService,
-            DiceFrameClient=client_mod.DiceFrameClient,
-            JsonBridgeStore=store_mod.JsonBridgeStore,
-            TriggerConfig=triggers_mod.TriggerConfig,
-        )
-
-    def _trigger_mode(self) -> str:
-        mode = str(getattr(self.config.commands, "trigger_mode", "") or "").strip()
-        if mode in {"prefix_only", "mention_bare", "prefix_or_mention", "bare"}:
-            return mode
-        return "mention_bare" if self.config.commands.allow_mentioned_bare_commands else "prefix_only"
 
     @Command(
         "diceframe",
@@ -391,25 +330,6 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
 
         raw_text = self._extract_command_text(matched_groups, kwargs)
         platform_user_id = self._scoped_user_id(platform, user_id)
-        bridge_service = getattr(self, "_bridge_service", None)
-        shared = getattr(self, "_shared_core", None)
-        if bridge_service is not None and shared is not None:
-            result = await bridge_service.handle(
-                shared.BridgeInput(
-                    stream_id=stream_id,
-                    platform_user_id=platform_user_id,
-                    text=raw_text,
-                    mentioned_bot=self._message_mentions_bot(kwargs.get("message")),
-                    platform=platform,
-                    raw_message=kwargs.get("message"),
-                )
-            )
-            if not result.handled:
-                return False, "非 DiceFrame 显式前缀命令，已忽略", False
-            for reply in result.replies:
-                await self.ctx.send.text(reply, stream_id)
-            return True, "DiceFrame 命令已处理", True
-
         explicit_prefix = self._has_explicit_prefix(raw_text)
         if not explicit_prefix and not self.config.commands.allow_mentioned_bare_commands:
             return False, "非 DiceFrame 显式前缀命令，已忽略", False

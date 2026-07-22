@@ -38,9 +38,7 @@ http://127.0.0.1:18000
 - `diceframe.bot_token`: DiceFrame Bot API Token。在 DiceFrame 的“设置 → Bot API”中显示并复制；它不是 NapCat 的 access_token。
 - `diceframe.public_base_url`: 可选的玩家网页地址覆盖值。留空时自动读取 DiceFrame“设置 → 分享链接地址”；仅在该设置也为空时才使用 `diceframe.base_url`。
 - `diceframe.request_timeout_sec`: DiceFrame HTTP 请求超时时间；剧情生成较慢时可适当增加。
-- `diceframe.shared_core_path`: 可选，DiceFrame 源码根目录；仅源码联调时需要，普通安装保持为空。
 - `commands.prefixes`: 兜底命令前缀，默认 `/df`、`/diceframe`、`跑团`。
-- `commands.trigger_mode`: 推荐保持 `prefix_only`，只处理显式 `/df`、`/diceframe` 或 `跑团` 命令。
 - `commands.require_mention_for_bare_commands`: 无前缀裸指令必须来自 @/提到 MaiBot 的消息，默认开启，避免误吞普通聊天。
 - `commands.advance_allowed_users`: 额外允许使用“推进/下一轮”的用户 ID。通常留空即可；绑定该局的 DiceFrame GM 会自动允许。若 MaiBot 或上游桥接器已经配置了聊天白名单，一般不需要在这里重复配置。
 

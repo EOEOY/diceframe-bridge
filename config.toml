@@ -7,11 +7,9 @@ base_url = "http://127.0.0.1:18000"
 bot_token = ""
 public_base_url = ""
 request_timeout_sec = 120
-shared_core_path = ""
 
 [commands]
 prefixes = ["/df", "/diceframe", "跑团"]
-trigger_mode = "prefix_only"
 allow_mentioned_bare_commands = false
 require_mention_for_bare_commands = true
 command_dedup_window_sec = 3
