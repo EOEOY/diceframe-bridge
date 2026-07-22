@@ -1,8 +1,9 @@
 # DiceFrame Bridge
 
+DiceFrame Bridge 是 DiceFrame 的聊天桥接插件，用来把 MaiBot 当前聊天流连接到 DiceFrame 跑团服务。安装后，在聊天里使用 `/df 绑定`、`/df 加入`、`/df 状态`、`/df 掷骰` 等指令，把群聊里的跑团操作转发给 DiceFrame HTTP API。
+
 [DiceFrame](https://github.com/diceframe/diceframe) 是一个 AI 驱动的 TRPG 跑团应用，提供 Web 跑团界面、角色管理、剧情推进、掷骰确认、地图/前情/私密日志等能力。
 
-DiceFrame Bridge 是 DiceFrame 的聊天桥接插件，用来把 MaiBot 当前聊天流连接到 DiceFrame 跑团服务。安装后，推荐在聊天里使用 `/df 绑定`、`/df 加入`、`/df 状态`、`/df 掷骰` 等指令，把群聊里的跑团操作转发给 DiceFrame HTTP API。
 
 ## 功能
 
