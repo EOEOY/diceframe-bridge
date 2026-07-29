@@ -1,5 +1,7 @@
 # DiceFrame Bridge
 
+中文 | [English](README_EN.md)
+
 DiceFrame Bridge 是 DiceFrame 的聊天桥接插件，用来把 MaiBot 当前聊天流连接到 DiceFrame 跑团服务。安装后，在聊天里使用 `/df 绑定`、`/df 加入`、`/df 状态`、`/df 掷骰` 等指令，把群聊里的跑团操作转发给 DiceFrame HTTP API。
 
 [DiceFrame](https://github.com/diceframe/diceframe) 是一个 AI 驱动的 TRPG 跑团应用，提供 Web 跑团界面、角色管理、剧情推进、掷骰确认、地图/前情/私密日志等能力。
@@ -14,6 +16,8 @@ DiceFrame Bridge 是 DiceFrame 的聊天桥接插件，用来把 MaiBot 当前�
 - 查看状态、前情、地图、感知/私密日志
 - 处理待支付请求
 - GM 推进回合、暂离/回来
+- 跟随绑定对局语言显示中文或英文命令与操作提示
+- DiceFrame 支持 Bot Bridge 扩展协议时，使用服务端安装的自定义命令、回复 Hook、图片和卡片渲染
 
 ## 安装
 
@@ -21,6 +25,14 @@ DiceFrame Bridge 是 DiceFrame 的聊天桥接插件，用来把 MaiBot 当前�
 2. 打开 DiceFrame 的“设置 → Bot API”，复制“DiceFrame 服务地址”和“Bot API Token”。
 3. 在 MaiBot WebUI 的插件配置里打开“DiceFrame 服务”，填写 `diceframe.base_url` 和 `diceframe.bot_token`；也可以直接编辑本插件的 `config.toml`。
 4. 启用插件并发送 `/df 测试连接`。该命令会同时检查网络连通性和 Bot API Token。
+
+插件只依赖 Manifest 中声明的 `aiohttp`，申请 `send.text` 和 `send.image` 发送能力；不会直接读取或修改 DiceFrame 存档。
+
+## Bot Bridge 扩展兼容
+
+插件会通过 `/api/bot/ping` 检查 DiceFrame 是否支持 Bot Bridge 扩展协议。支持时，`/df` 命令和最终回复会经过 DiceFrame 服务端安装的 `bot-extension` 插件，因此社区扩展可以新增命令、修改文字，或返回图片和卡片。图片由 DiceFrame 以 Bot 鉴权地址提供，本插件下载后通过 MaiBot 的 `send.image` 能力发送。
+
+旧版 DiceFrame 没有该协议时，本插件继续使用自身现有命令和文字展示，不需要修改配置或重新绑定。扩展插件临时失败时同样回退当前内置逻辑。
 
 ## DiceFrame 配置
 
@@ -39,7 +51,10 @@ http://127.0.0.1:18000
 - `diceframe.public_base_url`: 可选的玩家网页地址覆盖值。留空时自动读取 DiceFrame“设置 → 分享链接地址”；仅在该设置也为空时才使用 `diceframe.base_url`。
 - `diceframe.request_timeout_sec`: DiceFrame HTTP 请求超时时间；剧情生成较慢时可适当增加。
 - `commands.prefixes`: 兜底命令前缀，默认 `/df`、`/diceframe`、`跑团`。
+- `commands.allow_mentioned_bare_commands`: 兼容旧用法，允许 @MaiBot 后发送无前缀命令；默认关闭，推荐继续使用 `/df`。
 - `commands.require_mention_for_bare_commands`: 无前缀裸指令必须来自 @/提到 MaiBot 的消息，默认开启，避免误吞普通聊天。
+- `commands.command_dedup_window_sec`: 同一聊天流、用户和命令的重复忽略窗口。
+- `commands.max_reply_chars`: 单条回复最大字符数，超出后分段发送。
 - `commands.advance_allowed_users`: 额外允许使用“推进/下一轮”的用户 ID。通常留空即可；绑定该局的 DiceFrame GM 会自动允许。若 MaiBot 或上游桥接器已经配置了聊天白名单，一般不需要在这里重复配置。
 
 首次使用DiceFrame Bridge，需要从“设置 → Bot API”复制同一个 Token。重新生成 Token 后，旧值立即失效，必须同步更新 MaiBot 插件配置。
@@ -89,6 +104,33 @@ GM 先在 DiceFrame 网页里打开当前游戏，生成一次性 Bot 绑定凭�
 ```
 
 说明：自然语言行动可以直接写成 `/df 我调查四周`。
+
+### 英文对局
+
+绑定时插件会读取 DiceFrame 对局语言。英文对局可直接使用：
+
+```text
+/df help
+/df bind <game_key> <one-time-token>
+/df invite
+/df create character
+/df AI character
+/df join Erin
+/df status
+/df recap
+/df map
+/df sense
+/df roll
+/df pay
+/df confirm pay 1
+/df reject pay 1
+/df away
+/df back
+/df advance
+/df I inspect the area
+```
+
+旧绑定没有语言字段时继续使用中文；英文对局重新绑定一次即可保存英文设置。
 
 ## 注意
 

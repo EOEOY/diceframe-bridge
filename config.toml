@@ -1,6 +1,6 @@
 [plugin]
 enabled = false
-config_version = "0.1.0"
+config_version = "0.2.0"
 
 [diceframe]
 base_url = "http://127.0.0.1:18000"
