@@ -39,7 +39,7 @@ if "maibot_sdk" not in sys.modules:
     sys.modules["maibot_sdk"] = sdk
 
 
-from plugin import BridgeStore, DiceFrameBridgePlugin, normalize_language  # noqa: E402
+from plugin import BridgeStore, DiceFrameBridgePlugin, DiceFrameHTTPError, normalize_language  # noqa: E402
 
 
 class FakeClient:
@@ -229,9 +229,31 @@ class BridgeI18nTests(unittest.IsolatedAsyncioTestCase):
 
     def test_manifest_declares_english_locale(self):
         manifest = json.loads((Path(__file__).parents[1] / "_manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.2.0")
+        self.assertEqual(manifest["version"], "0.2.1")
         self.assertEqual(manifest["capabilities"], ["send.text", "send.image"])
         self.assertEqual(manifest["i18n"]["supported_locales"], ["zh-CN", "en"])
+
+    async def test_deleted_game_error_unbinds_stale_chat(self):
+        await self.store.bind_group(
+            "stream-1",
+            "deleted-game",
+            "qq:gm",
+            "gm-1",
+            [],
+            language="zh-CN",
+        )
+
+        reply = await self.bridge._http_error_reply(
+            DiceFrameHTTPError("游戏不存在", status=404, code="GAME_NOT_FOUND"),
+            "stream-1",
+            "zh-CN",
+        )
+
+        self.assertIn("已自动解除绑定", reply)
+        self.assertIsNone(self.store.group("stream-1"))
+        persisted = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["groups"], {})
+        self.assertEqual(persisted["players"], {})
 
     def test_command_pattern_accepts_english_commands_case_insensitively(self):
         pattern = DiceFrameBridgePlugin.handle_diceframe._command_pattern
