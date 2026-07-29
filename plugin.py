@@ -141,6 +141,11 @@ class DiceFrameBridgeConfig(PluginConfigBase):
 class DiceFrameHTTPError(RuntimeError):
     """Raised when DiceFrame returns an error payload."""
 
+    def __init__(self, message: str, *, status: int | None = None, code: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = str(code or "")
+
 
 class DiceFrameClient:
     """Small async client for DiceFrame's Bot-facing HTTP API."""
@@ -259,12 +264,22 @@ class DiceFrameClient:
                 data = await response.json(content_type=None)
             except Exception as exc:
                 text = await response.text()
-                raise DiceFrameHTTPError(f"DiceFrame 返回了非 JSON 响应：HTTP {response.status} {text[:120]}") from exc
+                raise DiceFrameHTTPError(
+                    f"DiceFrame 返回了非 JSON 响应：HTTP {response.status} {text[:120]}",
+                    status=response.status,
+                ) from exc
             if response.status >= 400:
                 error = data.get("error") or data.get("message") or f"HTTP {response.status}"
-                raise DiceFrameHTTPError(str(error))
+                raise DiceFrameHTTPError(
+                    str(error),
+                    status=response.status,
+                    code=str(data.get("code") or ""),
+                )
             if isinstance(data, dict) and data.get("ok") is False:
-                raise DiceFrameHTTPError(str(data.get("error") or data.get("narration") or "DiceFrame 请求失败"))
+                raise DiceFrameHTTPError(
+                    str(data.get("error") or data.get("narration") or "DiceFrame 请求失败"),
+                    code=str(data.get("code") or ""),
+                )
             return data if isinstance(data, dict) else {"data": data}
 
 
@@ -478,17 +493,27 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
         try:
             reply = await self._dispatch_command(command_text, stream_id, platform_user_id)
         except DiceFrameHTTPError as exc:
-            reply = localized_text(
-                language,
-                "DiceFrame 请求失败：{error}",
-                "DiceFrame request failed: {error}",
-                error=localized_error(exc, language),
-            )
+            reply = await self._http_error_reply(exc, stream_id, language)
         except Exception as exc:
             reply = localized_text(language, "DiceFrame Bridge 处理失败：{error}", "DiceFrame Bridge failed: {error}", error=exc)
 
         await self._send_reply(stream_id, reply, language, platform=platform)
         return True, "DiceFrame 命令已处理", True
+
+    async def _http_error_reply(self, exc: DiceFrameHTTPError, stream_id: str, language: str) -> str:
+        if exc.code == "GAME_NOT_FOUND" or exc.status == 404:
+            await self._store.unbind_group(stream_id)
+            return localized_text(
+                language,
+                "绑定的 DiceFrame 对局已不存在，已自动解除绑定。请创建或选择对局后重新绑定。",
+                "The bound DiceFrame game no longer exists, so this chat was unbound. Bind it to another game to continue.",
+            )
+        return localized_text(
+            language,
+            "DiceFrame 请求失败：{error}",
+            "DiceFrame request failed: {error}",
+            error=localized_error(exc, language),
+        )
 
     async def _dispatch_command(self, text: str, stream_id: str, platform_user_id: str) -> str:
         language = self._message_language(stream_id, text)
