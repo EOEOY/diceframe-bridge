@@ -45,7 +45,9 @@ from plugin import BridgeStore, DiceFrameBridgePlugin, DiceFrameHTTPError, norma
 class FakeClient:
     def __init__(self):
         self.payment_resolutions = []
+        self.luck_resolutions = []
         self.extension_calls = []
+        self.pending_luck = []
 
     async def bind_game(self, game_key: str, bind_token: str) -> dict:
         self.bind_call = (game_key, bind_token)
@@ -87,11 +89,17 @@ class FakeClient:
                 "round": 3,
                 "status": "pending",
             }],
+            "pending_luck_decisions": list(self.pending_luck),
         }
 
     async def resolve_payment(self, game_key: str, actor: str, payment_id: str, accepted: bool) -> dict:
         self.payment_resolutions.append((game_key, actor, payment_id, accepted))
         return {"ok": True, "accepted": accepted}
+
+    async def resolve_luck(self, game_key: str, actor: str, check_id: str, *, spend: bool) -> dict:
+        self.luck_resolutions.append((game_key, actor, check_id, spend))
+        self.pending_luck = []
+        return {"ok": True, "advanced": False, "pending_luck_decisions": []}
 
     async def ping(self) -> dict:
         return {"ok": True, "bridge_extensions": {"protocol_version": 1}}
@@ -229,7 +237,7 @@ class BridgeI18nTests(unittest.IsolatedAsyncioTestCase):
 
     def test_manifest_declares_english_locale(self):
         manifest = json.loads((Path(__file__).parents[1] / "_manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.2.1")
+        self.assertEqual(manifest["version"], "0.2.2")
         self.assertEqual(manifest["capabilities"], ["send.text", "send.image"])
         self.assertEqual(manifest["i18n"]["supported_locales"], ["zh-CN", "en"])
 
@@ -261,6 +269,32 @@ class BridgeI18nTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(re.fullmatch(pattern, "create character"))
         self.assertIsNotNone(re.fullmatch(pattern, "AI character"))
         self.assertIsNotNone(re.fullmatch(pattern, "CONFIRM PAY 1"))
+        self.assertIsNotNone(re.fullmatch(pattern, "NO LUCK"))
+
+    async def test_luck_decision_uses_shared_server_endpoint(self):
+        await self.store.bind_group(
+            "stream-1",
+            "game-1",
+            "discord:gm",
+            "gm-1",
+            [{"user_id": "player-1", "character_name": "Erin"}],
+            language="en",
+        )
+        await self.store.bind_player("stream-1", "discord:player", "player-1")
+        self.bridge._client.pending_luck = [{
+            "check_id": "check-1",
+            "actor_uid": "player-1",
+            "actor_name": "Erin",
+            "luck_cost": 2,
+        }]
+
+        reply = await self.bridge._dispatch_command("luck", "stream-1", "discord:player")
+
+        self.assertIn("Spent 2 Luck", reply)
+        self.assertEqual(
+            self.bridge._client.luck_resolutions,
+            [("game-1", "player-1", "check-1", True)],
+        )
 
     def test_language_inference_is_safe_before_runtime_initialization(self):
         bridge = DiceFrameBridgePlugin()

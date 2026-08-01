@@ -93,6 +93,8 @@ GM 先在 DiceFrame 网页里打开当前游戏，生成一次性 Bot 绑定凭�
 /df 地图
 /df 感知
 /df 掷骰
+/df 幸运
+/df 不用幸运
 /df 暂离
 /df 回来
 /df 支付
@@ -121,6 +123,8 @@ GM 先在 DiceFrame 网页里打开当前游戏，生成一次性 Bot 绑定凭�
 /df map
 /df sense
 /df roll
+/df luck
+/df no luck
 /df pay
 /df confirm pay 1
 /df reject pay 1
