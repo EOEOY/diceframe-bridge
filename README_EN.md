@@ -69,6 +69,8 @@ Common English commands:
 /df map
 /df sense
 /df roll
+/df luck
+/df no luck
 /df pay
 /df confirm pay 1
 /df reject pay 1

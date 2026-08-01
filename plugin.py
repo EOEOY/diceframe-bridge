@@ -43,6 +43,7 @@ def infer_command_language(text: object, fallback: str = DEFAULT_LANGUAGE) -> st
         "map", "roll", "advance", "next", "pay", "payment", "payments", "confirm",
         "reject", "sense", "perception", "log", "away", "return", "back", "ping",
         "character", "create",
+        "luck", "spend", "no",
     } or value in {"ai character", "ai character generation"}:
         return "en"
     return normalize_language(fallback)
@@ -61,6 +62,26 @@ def payment_decision(text: object) -> bool | None:
     )):
         return False
     return None
+
+
+def luck_decision(text: object) -> bool | None:
+    normalized = re.sub(r"\s+", "", str(text or "").strip().lower())
+    if normalized in {
+        "幸运", "用幸运", "使用幸运", "消耗幸运", "花幸运",
+        "luck", "useluck", "spendluck",
+    } or normalized.startswith(("用幸运", "使用幸运", "消耗幸运", "花幸运", "useluck", "spendluck")):
+        return True
+    if normalized in {
+        "不用幸运", "不使用幸运", "保留失败", "接受失败", "放弃幸运",
+        "noluck", "declineluck", "keepfailure", "acceptfailure",
+    } or normalized.startswith(("不用幸运", "不使用幸运", "保留失败", "接受失败", "放弃幸运", "declineluck", "keepfailure")):
+        return False
+    return None
+
+
+def decision_index(text: object) -> int:
+    match = re.search(r"(\d+)", str(text or ""))
+    return max(1, int(match.group(1))) if match else 1
 
 
 def localized_error(error: object, language: object) -> str:
@@ -217,6 +238,14 @@ class DiceFrameClient:
             f"/api/games/{quote(game_key, safe='')}/advance",
             actor=actor,
             json={"force": bool(force)},
+        )
+
+    async def resolve_luck(self, game_key: str, actor: str, check_id: str, *, spend: bool) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            f"/api/games/{quote(game_key, safe='')}/checks/{quote(check_id, safe='')}/luck",
+            actor=actor,
+            json={"spend": bool(spend)},
         )
 
     async def set_away(self, game_key: str, actor: str, user_id: str, away: bool) -> dict[str, Any]:
@@ -439,7 +468,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
             r"|(?:帮助|help|\?|绑定|bind|解绑|unbind|加入|join|邀请|invite|新建角色|车卡|AI车卡|ai车卡|"
             r"前情|recap|summary|地图|map|状态|status|感知|sense|perception|log|支付|pay|payment|payments|"
             r"确认支付|拒绝支付|confirm|reject|rejectpay|掷骰|roll|推进|下一轮|advance|next|暂离|away|"
-            r"回来|return|back|行动|做|连接测试|测试连接|ping|character|create|new|ai)(?:\s+.*)?"
+            r"幸运|用幸运|不用幸运|保留失败|luck|spendluck|noluck|spend\s+luck|no\s+luck|keep\s+failure|回来|return|back|行动|做|连接测试|测试连接|ping|character|create|new|ai)(?:\s+.*)?"
             r"))$)"
         ),
     )
@@ -532,6 +561,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
             "new character", "create character", "character creation", "character",
         }
         decision = payment_decision(text)
+        luck = luck_decision(text)
 
         parts = text.split(maxsplit=1)
         verb = parts[0].strip()
@@ -565,6 +595,11 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
             "character": "新建角色",
             "create": "新建角色",
             "summary": "前情",
+            "luck": "幸运",
+            "spendluck": "幸运",
+            "noluck": "不用幸运",
+            "declineluck": "不用幸运",
+            "keepfailure": "不用幸运",
         }
         verb = aliases.get(verb.lower(), verb)
 
@@ -593,6 +628,13 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
             return await self._handle_private_log(stream_id, platform_user_id)
         if verb == "掷骰":
             return await self._handle_roll(stream_id, platform_user_id)
+        if verb in {"幸运", "不用幸运"} or luck is not None:
+            return await self._handle_luck(
+                stream_id,
+                platform_user_id,
+                text,
+                spend=(verb == "幸运") if luck is None else luck,
+            )
         if verb == "推进":
             return await self._handle_advance(stream_id, platform_user_id)
         if verb == "暂离":
@@ -821,6 +863,47 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
         result = await self._client.advance(game_key, actor, force=True)
         return self._format_advance_response(result, language)
 
+    async def _handle_luck(
+        self,
+        stream_id: str,
+        platform_user_id: str,
+        text: str,
+        *,
+        spend: bool,
+    ) -> str:
+        group, game_key, actor = self._require_actor(stream_id, platform_user_id)
+        language = self._group_language(group)
+        detail = await self._client.detail(game_key, actor)
+        pending = [
+            check for check in (detail.get("pending_luck_decisions") or [])
+            if isinstance(check, dict) and str(check.get("actor_uid") or "") == actor
+        ]
+        if not pending:
+            return localized_text(language, "当前没有等待你处理的幸运选择。", "There is no Luck decision waiting for you.")
+        index = decision_index(text)
+        if index > len(pending):
+            return localized_text(language, "没有第 {index} 个幸运选择。", "There is no Luck decision #{index}.", index=index)
+        check = pending[index - 1]
+        result = await self._client.resolve_luck(
+            game_key,
+            actor,
+            str(check.get("check_id") or ""),
+            spend=spend,
+        )
+        cost = int(check.get("luck_cost", 0) or 0)
+        prefix = localized_text(
+            language,
+            "已消耗 {cost} 点幸运，本次检定改为普通成功。" if spend else "未使用幸运，本次检定保留失败。",
+            "Spent {cost} Luck; the check is now a regular success." if spend else "Luck was not spent; the failure is kept.",
+            cost=cost,
+        )
+        narration = str(result.get("narration") or "").strip()
+        if narration:
+            return prefix + "\n" + narration
+        if result.get("pending_luck_decisions"):
+            return prefix + localized_text(language, " 仍在等待其他角色选择幸运。", " Waiting for other Luck decisions.")
+        return prefix
+
     async def _handle_away(self, stream_id: str, platform_user_id: str, away: bool) -> str:
         group, game_key, actor = self._require_actor(stream_id, platform_user_id)
         language = self._group_language(group)
@@ -933,6 +1016,31 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
         narration = str(result.get("narration") or "").strip()
         if narration:
             lines.append(narration)
+        pending_luck = result.get("pending_luck_decisions") if isinstance(result.get("pending_luck_decisions"), list) else []
+        if pending_luck:
+            lines.append("Luck decision required:" if english else "需要决定是否使用幸运：")
+            multiple = len(pending_luck) > 1
+            for index, check in enumerate(pending_luck, 1):
+                if not isinstance(check, dict):
+                    continue
+                number = f"{index}. " if multiple else ""
+                actor_name = str(check.get("actor_name") or check.get("actor_uid") or ("Character" if english else "角色"))
+                cost = int(check.get("luck_cost", 0) or 0)
+                if english:
+                    lines.append(f"{number}{actor_name}: d100={check.get('roll')}/{check.get('threshold')}; spend {cost} Luck for a regular success.")
+                else:
+                    lines.append(f"{number}{actor_name}：d100={check.get('roll')}/{check.get('threshold')}；可消耗 {cost} 点幸运变为普通成功。")
+            lines.append(
+                "Use: /df luck; keep failure: /df no luck"
+                if english else
+                "使用：/df 幸运；保留失败：/df 不用幸运"
+            )
+            if multiple:
+                lines.append(
+                    "Your character is matched automatically; add a number only if that character has multiple decisions."
+                    if english else
+                    "系统会自动匹配你的角色；只有同一角色有多个选择时才需要追加序号。"
+                )
         if result.get("advanced"):
             try:
                 detail = await self._client.detail(game_key, actor)
@@ -1108,6 +1216,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
                 "/df join <Character Name>\n"
                 "/df <natural-language action>, or /df action <natural-language action>\n"
                 "/df roll\n"
+                "/df luck / no luck\n"
                 "/df status / recap / map / sense\n"
                 "/df pay / confirm pay 1 / reject pay 1\n"
                 "/df away / back\n"
@@ -1122,6 +1231,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
             "跑团 加入 <角色名>\n"
             "跑团 <自然语言行动>，或 跑团 行动 <自然语言行动>\n"
             "跑团 掷骰\n"
+            "跑团 幸运 / 不用幸运\n"
             "跑团 状态 / 前情 / 地图 / 感知\n"
             "跑团 支付 / 支付 1 / 拒绝支付 1\n"
             "跑团 暂离 / 回来\n"
@@ -1142,6 +1252,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
                 "1. /df join Character Name\n"
                 "2. /df I inspect the area\n"
                 "3. When prompted: /df roll\n"
+                "   If offered: /df luck or /df no luck\n"
                 "4. Catch up with /df recap, /df map, or /df status\n"
                 "Use /df instead of mentioning MaiBot to avoid triggering its normal chat reply."
             )
@@ -1151,6 +1262,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
             "1. 跑团 加入 角色名\n"
             "2. 跑团 我调查四周\n"
             "3. 需要检定时：跑团 掷骰\n"
+            "   可以消耗幸运时：跑团 幸运 / 跑团 不用幸运\n"
             "4. 补信息：跑团 前情、跑团 地图、跑团 状态\n"
             "不要 @我，避免触发 MaiBot 主聊天回复。"
         )
