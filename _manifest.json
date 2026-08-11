@@ -3,7 +3,7 @@
   "id": "github.eoeoy.diceframe-bridge",
   "version": "0.2.2",
   "name": "DiceFrame Bridge",
-  "description": "将 MaiBot 聊天流桥接到 DiceFrame 跑团服务，支持中英文对局、群聊绑定、角色认领、行动、掷骰、支付和 GM 推进。",
+  "description": "将 MaiBot 聊天流桥接到 DiceFrame 跑团服务，支持中英文对局、群聊绑定、角色认领、行动、系统检定、支付和 GM 推进。",
   "author": {
     "name": "EOEOY",
     "url": "https://github.com/EOEOY"

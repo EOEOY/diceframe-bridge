@@ -8,7 +8,7 @@ DiceFrame Bridge connects the current MaiBot chat stream to a DiceFrame tabletop
 
 - Bind a MaiBot chat stream to a DiceFrame game.
 - Claim an existing DiceFrame character.
-- Submit natural-language actions and confirm server-side rolls.
+- Submit natural-language actions; once every active player has acted, AI adjudicates checks and the server rolls once.
 - View character status, recap, map, and private character information.
 - Review and resolve pending payments.
 - Advance rounds as the bound GM or an authorized user.
@@ -68,7 +68,6 @@ Common English commands:
 /df recap
 /df map
 /df sense
-/df roll
 /df luck
 /df no luck
 /df pay
@@ -82,6 +81,8 @@ Common English commands:
 ```
 
 Chinese games continue to accept the existing Chinese commands. Bindings created by an older plugin version have no stored language and therefore remain Chinese; rebind an English game once to store its language.
+
+The round advances only after every active player has submitted an action, or when the GM explicitly uses `/df advance`. There is no round countdown. DiceFrame adjudicates required checks and rolls exactly once on the server, so players do not confirm rolls manually.
 
 ## Notes and Troubleshooting
 
