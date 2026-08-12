@@ -2,9 +2,9 @@
 
 中文 | [English](README_EN.md)
 
-DiceFrame Bridge 是 DiceFrame 的聊天桥接插件，用来把 MaiBot 当前聊天流连接到 DiceFrame 跑团服务。安装后，在聊天里使用 `/df 绑定`、`/df 加入`、`/df 状态`、`/df 掷骰` 等指令，把群聊里的跑团操作转发给 DiceFrame HTTP API。
+DiceFrame Bridge 是 DiceFrame 的聊天桥接插件，用来把 MaiBot 当前聊天流连接到 DiceFrame 跑团服务。安装后，在聊天里使用 `/df 绑定`、`/df 加入`、`/df 状态` 等指令，把群聊里的跑团操作转发给 DiceFrame HTTP API。
 
-[DiceFrame](https://github.com/diceframe/diceframe) 是一个 AI 驱动的 TRPG 跑团应用，提供 Web 跑团界面、角色管理、剧情推进、掷骰确认、地图/前情/私密日志等能力。
+[DiceFrame](https://github.com/diceframe/diceframe) 是一个 AI 驱动的 TRPG 跑团应用，提供 Web 跑团界面、角色管理、剧情推进、系统检定、地图/前情/私密日志等能力。
 
 
 ## 功能
@@ -12,7 +12,7 @@ DiceFrame Bridge 是 DiceFrame 的聊天桥接插件，用来把 MaiBot 当前�
 - 绑定当前聊天流到 DiceFrame 对局
 - 认领已有角色
 - 提交自然语言行动
-- 确认系统掷骰
+- 全员行动齐后由 AI 判断检定、服务端公平掷骰，并用文本展示结果
 - 查看状态、前情、地图、感知/私密日志
 - 处理待支付请求
 - GM 推进回合、暂离/回来
@@ -92,7 +92,6 @@ GM 先在 DiceFrame 网页里打开当前游戏，生成一次性 Bot 绑定凭�
 /df 前情
 /df 地图
 /df 感知
-/df 掷骰
 /df 幸运
 /df 不用幸运
 /df 暂离
@@ -105,7 +104,7 @@ GM 先在 DiceFrame 网页里打开当前游戏，生成一次性 Bot 绑定凭�
 /df 解绑
 ```
 
-说明：自然语言行动可以直接写成 `/df 我调查四周`。
+说明：自然语言行动可以直接写成 `/df 我调查四周`。所有在场玩家提交行动后自动推进；GM 也可以随时使用 `/df 推进`。AI 会统一判断是否需要检定，服务端只掷一次并把结果发到群里，没有回合倒计时，也不需要玩家确认掷骰。
 
 ### 英文对局
 
@@ -122,7 +121,6 @@ GM 先在 DiceFrame 网页里打开当前游戏，生成一次性 Bot 绑定凭�
 /df recap
 /df map
 /df sense
-/df roll
 /df luck
 /df no luck
 /df pay

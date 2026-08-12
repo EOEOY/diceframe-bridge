@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import re
@@ -15,97 +14,19 @@ import aiohttp
 
 from maibot_sdk import Command, Field, MaiBotPlugin, PluginConfigBase
 
-
-DEFAULT_LANGUAGE = "zh-CN"
-
-
-def normalize_language(value: object) -> str:
-    text = str(value or "").strip().lower().replace("_", "-")
-    if text in {"en", "en-us", "en-gb", "english"}:
-        return "en"
-    return DEFAULT_LANGUAGE
-
-
-def is_english(value: object) -> bool:
-    return normalize_language(value) == "en"
-
-
-def localized_text(language: object, zh: str, en: str, **values: object) -> str:
-    return (en if is_english(language) else zh).format(**values)
-
-
-def infer_command_language(text: object, fallback: str = DEFAULT_LANGUAGE) -> str:
-    """Infer language only from explicit command words, not story actions."""
-    value = re.sub(r"\s+", " ", str(text or "").strip().lower())
-    first = value.split(" ", 1)[0] if value else ""
-    if first in {
-        "help", "bind", "unbind", "join", "invite", "status", "recap", "summary",
-        "map", "roll", "advance", "next", "pay", "payment", "payments", "confirm",
-        "reject", "sense", "perception", "log", "away", "return", "back", "ping",
-        "character", "create",
-        "luck", "spend", "no",
-    } or value in {"ai character", "ai character generation"}:
-        return "en"
-    return normalize_language(fallback)
-
-
-def payment_decision(text: object) -> bool | None:
-    normalized = re.sub(r"\s+", "", str(text or "").strip().lower())
-    if normalized.startswith((
-        "确认支付", "同意支付", "确认付款", "同意付款",
-        "confirmpay", "confirmpayment", "acceptpay", "acceptpayment",
-    )):
-        return True
-    if normalized.startswith((
-        "拒绝支付", "取消支付", "拒绝付款", "取消付款",
-        "rejectpay", "rejectpayment", "declinepay", "declinepayment",
-    )):
-        return False
-    return None
-
-
-def luck_decision(text: object) -> bool | None:
-    normalized = re.sub(r"\s+", "", str(text or "").strip().lower())
-    if normalized in {
-        "幸运", "用幸运", "使用幸运", "消耗幸运", "花幸运",
-        "luck", "useluck", "spendluck",
-    } or normalized.startswith(("用幸运", "使用幸运", "消耗幸运", "花幸运", "useluck", "spendluck")):
-        return True
-    if normalized in {
-        "不用幸运", "不使用幸运", "保留失败", "接受失败", "放弃幸运",
-        "noluck", "declineluck", "keepfailure", "acceptfailure",
-    } or normalized.startswith(("不用幸运", "不使用幸运", "保留失败", "接受失败", "放弃幸运", "declineluck", "keepfailure")):
-        return False
-    return None
-
-
-def decision_index(text: object) -> int:
-    match = re.search(r"(\d+)", str(text or ""))
-    return max(1, int(match.group(1))) if match else 1
-
-
-def localized_error(error: object, language: object) -> str:
-    text = str(error or "").strip()
-    if not is_english(language):
-        return text
-    known = {
-        "未配置 DiceFrame 服务地址": "DiceFrame service URL is not configured.",
-        "未配置 DiceFrame Bot API Token；请到 DiceFrame 设置 → Bot API 复制": (
-            "DiceFrame Bot API Token is not configured. Copy it from DiceFrame Settings → Bot API."
-        ),
-        "游戏不存在": "Game not found.",
-        "绑定凭证无效或已使用，请由 GM 在网页重新生成一次性绑定命令": (
-            "The binding token is invalid or has already been used. The GM must generate a new one-time binding command."
-        ),
-        "Bot 服务未授权": "Bot service authentication failed.",
-        "DiceFrame 请求失败": "DiceFrame request failed.",
-    }
-    if text in known:
-        return known[text]
-    prefix = "DiceFrame 返回了非 JSON 响应："
-    if text.startswith(prefix):
-        return "DiceFrame returned a non-JSON response: " + text[len(prefix):]
-    return text
+from presenters import (
+    DEFAULT_LANGUAGE,
+    decision_index,
+    format_check_result,
+    infer_command_language,
+    is_english,
+    localized_error,
+    localized_text,
+    luck_decision,
+    normalize_language,
+    payment_decision,
+)
+from state import BridgeStore
 
 
 class PluginSectionConfig(PluginConfigBase):
@@ -310,124 +231,6 @@ class DiceFrameClient:
                     code=str(data.get("code") or ""),
                 )
             return data if isinstance(data, dict) else {"data": data}
-
-
-class BridgeStore:
-    """Persistent mapping between MaiBot streams/users and DiceFrame games."""
-
-    def __init__(self, path: Path, recent_limit: int = 500) -> None:
-        self.path = path
-        self.recent_limit = recent_limit
-        self._lock = asyncio.Lock()
-        self.groups: dict[str, dict[str, Any]] = {}
-        self.players: dict[str, dict[str, str]] = {}
-        self.recent_commands: dict[str, float] = {}
-
-    async def load(self) -> None:
-        if not self.path.exists():
-            return
-        async with self._lock:
-            try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, json.JSONDecodeError):
-                return
-            self.groups = data.get("groups", {}) if isinstance(data.get("groups"), dict) else {}
-            self.players = data.get("players", {}) if isinstance(data.get("players"), dict) else {}
-            recent = data.get("recent_commands", {})
-            if isinstance(recent, dict):
-                self.recent_commands = {
-                    str(key): float(value)
-                    for key, value in recent.items()
-                    if isinstance(value, (int, float))
-                }
-
-    async def bind_group(
-        self,
-        stream_id: str,
-        game_key: str,
-        gm_platform_id: str,
-        gm_uid: str,
-        roster: list[dict[str, Any]],
-        language: str = DEFAULT_LANGUAGE,
-    ) -> None:
-        async with self._lock:
-            self.groups[stream_id] = {
-                "game_key": game_key,
-                "gm_platform_id": gm_platform_id,
-                "gm_uid": gm_uid,
-                "roster": roster,
-                "world_name": "",
-                "language": normalize_language(language),
-            }
-            self.players[self.player_key(stream_id, gm_platform_id)] = {"game_key": game_key, "user_id": gm_uid}
-            self._persist_locked()
-
-    async def unbind_group(self, stream_id: str) -> None:
-        async with self._lock:
-            group = self.groups.pop(stream_id, None)
-            game_key = str((group or {}).get("game_key") or "")
-            if game_key:
-                self.players = {
-                    key: value
-                    for key, value in self.players.items()
-                    if not key.startswith(stream_id + ":") or value.get("game_key") != game_key
-                }
-            self._persist_locked()
-
-    def group(self, stream_id: str) -> dict[str, Any] | None:
-        return self.groups.get(stream_id)
-
-    async def update_roster(self, stream_id: str, roster: list[dict[str, Any]]) -> None:
-        async with self._lock:
-            group = self.groups.get(stream_id)
-            if not group:
-                return
-            group["roster"] = roster
-            self._persist_locked()
-
-    def player(self, stream_id: str, platform_user_id: str) -> dict[str, str] | None:
-        return self.players.get(self.player_key(stream_id, platform_user_id))
-
-    async def bind_player(self, stream_id: str, platform_user_id: str, user_id: str) -> bool:
-        async with self._lock:
-            group = self.groups.get(stream_id)
-            if not group:
-                return False
-            game_key = str(group.get("game_key") or "")
-            for key, mapping in self.players.items():
-                if key != self.player_key(stream_id, platform_user_id) and mapping.get("game_key") == game_key and mapping.get("user_id") == user_id:
-                    return False
-            self.players[self.player_key(stream_id, platform_user_id)] = {"game_key": game_key, "user_id": user_id}
-            self._persist_locked()
-            return True
-
-    async def remember_command(self, signature: str, window_sec: float) -> bool:
-        signature = str(signature or "").strip()
-        if not signature or window_sec <= 0:
-            return True
-        now = time.time()
-        cutoff = now - window_sec
-        async with self._lock:
-            self.recent_commands = {key: ts for key, ts in self.recent_commands.items() if ts >= cutoff}
-            if signature in self.recent_commands:
-                return False
-            self.recent_commands[signature] = now
-            if len(self.recent_commands) > self.recent_limit:
-                newest = sorted(self.recent_commands.items(), key=lambda item: item[1])[-self.recent_limit :]
-                self.recent_commands = dict(newest)
-            self._persist_locked()
-            return True
-
-    @staticmethod
-    def player_key(stream_id: str, platform_user_id: str) -> str:
-        return f"{stream_id}:{platform_user_id}"
-
-    def _persist_locked(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.path.with_suffix(self.path.suffix + ".tmp")
-        data = {"groups": self.groups, "players": self.players, "recent_commands": self.recent_commands}
-        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp.replace(self.path)
 
 
 class DiceFrameBridgePlugin(MaiBotPlugin):
@@ -841,19 +644,16 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
         group, game_key, actor = self._require_actor(stream_id, platform_user_id)
         language = self._group_language(group)
         result = await self._client.action(game_key, actor, text)
-        if result.get("phase") == "dice":
-            return localized_text(
-                language,
-                "这次行动需要检定。请发送 /df 掷骰，或重新描述行动覆盖本轮声明。",
-                "This action requires a check. Send /df roll, or describe another action to replace it.",
-            )
         return await self._format_action_response(game_key, actor, result, language)
 
     async def _handle_roll(self, stream_id: str, platform_user_id: str) -> str:
-        group, game_key, actor = self._require_actor(stream_id, platform_user_id)
+        group, _game_key, _actor = self._require_actor(stream_id, platform_user_id)
         language = self._group_language(group)
-        result = await self._client.action(game_key, actor, "", confirm=True)
-        return await self._format_action_response(game_key, actor, result, language)
+        return localized_text(
+            language,
+            "现在不需要手动确认掷骰：请直接描述行动。所有在场玩家提交后，或 GM 手动推进时，系统会判断检定并只掷一次。",
+            "Manual roll confirmation is no longer required. Describe your action; after every active player submits, or when the GM advances, the server adjudicates and rolls once.",
+        )
 
     async def _handle_advance(self, stream_id: str, platform_user_id: str) -> str:
         group, game_key, actor = self._require_group(stream_id)
@@ -1013,6 +813,8 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
         if isinstance(roll, dict) and roll.get("value") is not None:
             label = "Roll" if english else "掷骰"
             lines.append(f"{label}: {str(roll.get('dice_system') or '').upper()} = {roll.get('value')}")
+        checks = result.get("check_results") if isinstance(result.get("check_results"), list) else []
+        lines.extend(format_check_result(check, language) for check in checks if isinstance(check, dict))
         narration = str(result.get("narration") or "").strip()
         if narration:
             lines.append(narration)
@@ -1074,6 +876,8 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
         english = is_english(language)
         lines: list[str] = []
         narration = str(result.get("narration") or result.get("message") or "").strip()
+        checks = result.get("check_results") if isinstance(result.get("check_results"), list) else []
+        lines.extend(format_check_result(check, language) for check in checks if isinstance(check, dict))
         if narration:
             lines.append(narration)
         forced = result.get("forced_waiting") if isinstance(result.get("forced_waiting"), list) else []
@@ -1215,7 +1019,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
                 "/df invite / create character / AI character\n"
                 "/df join <Character Name>\n"
                 "/df <natural-language action>, or /df action <natural-language action>\n"
-                "/df roll\n"
+                "Checks are adjudicated and rolled automatically after every active player submits, or when the GM advances.\n"
                 "/df luck / no luck\n"
                 "/df status / recap / map / sense\n"
                 "/df pay / confirm pay 1 / reject pay 1\n"
@@ -1230,7 +1034,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
             "跑团 邀请 / 新建角色 / 车卡 / AI车卡\n"
             "跑团 加入 <角色名>\n"
             "跑团 <自然语言行动>，或 跑团 行动 <自然语言行动>\n"
-            "跑团 掷骰\n"
+            "所有在场玩家都提交后，或 GM 手动推进时，系统会自动判断检定并掷骰。\n"
             "跑团 幸运 / 不用幸运\n"
             "跑团 状态 / 前情 / 地图 / 感知\n"
             "跑团 支付 / 支付 1 / 拒绝支付 1\n"
@@ -1251,8 +1055,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
                 f"Available: {self._roster_names(roster, language)}\n"
                 "1. /df join Character Name\n"
                 "2. /df I inspect the area\n"
-                "3. When prompted: /df roll\n"
-                "   If offered: /df luck or /df no luck\n"
+                "3. Checks are adjudicated and rolled automatically after everyone submits; use /df luck or /df no luck only if offered\n"
                 "4. Catch up with /df recap, /df map, or /df status\n"
                 "Use /df instead of mentioning MaiBot to avoid triggering its normal chat reply."
             )
@@ -1261,8 +1064,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
             f"可认领：{self._roster_names(roster, language)}\n"
             "1. 跑团 加入 角色名\n"
             "2. 跑团 我调查四周\n"
-            "3. 需要检定时：跑团 掷骰\n"
-            "   可以消耗幸运时：跑团 幸运 / 跑团 不用幸运\n"
+            "3. 全员提交后系统自动判断检定并掷骰；只有出现幸运选项时才发送：跑团 幸运 / 跑团 不用幸运\n"
             "4. 补信息：跑团 前情、跑团 地图、跑团 状态\n"
             "不要 @我，避免触发 MaiBot 主聊天回复。"
         )

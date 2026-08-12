@@ -39,7 +39,13 @@ if "maibot_sdk" not in sys.modules:
     sys.modules["maibot_sdk"] = sdk
 
 
-from plugin import BridgeStore, DiceFrameBridgePlugin, DiceFrameHTTPError, normalize_language  # noqa: E402
+from plugin import (  # noqa: E402
+    BridgeStore,
+    DiceFrameBridgePlugin,
+    DiceFrameHTTPError,
+    format_check_result,
+    normalize_language,
+)
 
 
 class FakeClient:
@@ -211,6 +217,24 @@ class BridgeI18nTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(normalize_language(self.store.group("stream-1").get("language")), "zh-CN")
         self.assertIn("群聊指南", self.bridge._bound_help_text(self.store.group("stream-1")))
+
+    async def test_server_check_result_is_localized_and_roll_command_is_informational(self):
+        check = {
+            "actor_name": "Erin",
+            "label": "Stealth Check",
+            "dice": "d20",
+            "roll": 12,
+            "modifier": 2,
+            "total": 14,
+            "dc": 12,
+            "verdict": "成功",
+        }
+        self.assertIn("d20=12(+2)=14 vs DC 12 → Success", format_check_result(check, "en"))
+
+        await self.store.bind_group("stream-1", "game-1", "qq:gm", "gm-1", [], language="en")
+        await self.store.bind_player("stream-1", "qq:player", "player-1")
+        message = await self.bridge._dispatch_command("roll", "stream-1", "qq:player")
+        self.assertIn("Manual roll confirmation is no longer required", message)
 
     async def test_existing_chinese_payment_commands_remain_compatible(self):
         await self.store.bind_group(
