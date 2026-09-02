@@ -259,6 +259,39 @@ class BridgeI18nTests(unittest.IsolatedAsyncioTestCase):
         rejected = await self.bridge._dispatch_command("拒绝支付 1", "stream-1", "qq:player")
         self.assertEqual(rejected, "支付已拒绝。")
 
+    async def test_canonical_economy_proposals_use_sequence_and_visibility(self):
+        await self.store.bind_group("stream-1", "game-1", "qq:gm", "gm-1", [], language="en")
+        await self.store.bind_player("stream-1", "qq:player", "player-1")
+
+        class CanonicalClient(FakeClient):
+            async def detail(self, _game_key: str, _actor: str) -> dict:
+                return {
+                    "gm_uid": "gm-1",
+                    "economy_proposals": [
+                        {
+                            "id": "team-1", "sequence": 42, "kind": "fee",
+                            "amount": 8, "status": "pending",
+                            "contributors": [{"uid": "player-1", "amount": 8}],
+                        },
+                        {
+                            "id": "private-other", "sequence": 43, "kind": "fee",
+                            "amount": 99, "status": "pending", "payer_uid": "other",
+                        },
+                    ],
+                }
+
+        self.bridge._client = CanonicalClient()
+        listing = await self.bridge._dispatch_command("pay", "stream-1", "qq:player")
+        self.assertIn("#42", listing)
+        self.assertNotIn("99", listing)
+
+        confirmed = await self.bridge._dispatch_command("confirm pay 42", "stream-1", "qq:player")
+        self.assertEqual(confirmed, "Payment of 8 gold confirmed.")
+        self.assertEqual(
+            self.bridge._client.payment_resolutions[-1],
+            ("game-1", "player-1", "team-1", True),
+        )
+
     def test_manifest_declares_english_locale(self):
         manifest = json.loads((Path(__file__).parents[1] / "_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], "0.2.2")

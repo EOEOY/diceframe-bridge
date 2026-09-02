@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import base64
-import json
 import re
-import time
 from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import quote, urlencode, urlparse, urlunparse
@@ -325,20 +323,34 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
         try:
             reply = await self._dispatch_command(command_text, stream_id, platform_user_id)
         except DiceFrameHTTPError as exc:
-            reply = await self._http_error_reply(exc, stream_id, language)
+            reply = await self._http_error_reply(exc, stream_id, language, actor=platform_user_id)
         except Exception as exc:
             reply = localized_text(language, "DiceFrame Bridge 处理失败：{error}", "DiceFrame Bridge failed: {error}", error=exc)
 
         await self._send_reply(stream_id, reply, language, platform=platform)
         return True, "DiceFrame 命令已处理", True
 
-    async def _http_error_reply(self, exc: DiceFrameHTTPError, stream_id: str, language: str) -> str:
+    async def _http_error_reply(self, exc: DiceFrameHTTPError, stream_id: str, language: str, *, actor: str = "") -> str:
         if exc.code == "GAME_NOT_FOUND" or exc.status == 404:
             await self._store.unbind_group(stream_id)
             return localized_text(
                 language,
                 "绑定的 DiceFrame 对局已不存在，已自动解除绑定。请创建或选择对局后重新绑定。",
                 "The bound DiceFrame game no longer exists, so this chat was unbound. Bind it to another game to continue.",
+            )
+        if exc.code == "ECONOMY_DECISION_PENDING":
+            visible = []
+            if actor:
+                try:
+                    group = self._store.group(stream_id) or {}
+                    mapped_actor = str((self._store.player(stream_id, actor) or {}).get("user_id") or actor)
+                    visible = await self._pending_payments_for_actor(str(group.get("game_key") or ""), mapped_actor)
+                except Exception:
+                    visible = []
+            return localized_text(
+                language,
+                "当前有经济提案待确认，请发送“支付”查看。" if visible else "当前正在等待 GM 或其他参与者处理经济提案。",
+                "An economy proposal is waiting for your decision. Send “pay” to review it." if visible else "The game is waiting for the GM or another contributor to resolve an economy proposal.",
             )
         return localized_text(
             language,
@@ -726,27 +738,34 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
         payments = await self._pending_payments_for_actor(game_key, actor)
         if accepted is None:
             if not payments:
-                return localized_text(language, "当前没有待处理的支付请求。", "There are no pending payment requests.")
+                return localized_text(language, "当前没有待处理支付或经济提案。", "There are no pending payments or economy proposals.")
             lines = ["Pending payments:" if english else "待处理支付："]
             for index, payment in enumerate(payments, 1):
                 lines.append(self._payment_line(payment, index, language))
+            reference = self._payment_reference(payments[0], 1)
             lines.append(
-                "Confirm: /df confirm pay 1; reject: /df reject pay 1"
+                f"Confirm: /df confirm pay {reference}; reject: /df reject pay {reference}"
                 if english else
-                "确认：/df 支付 1；拒绝：/df 拒绝支付 1"
+                f"确认：/df 支付 {reference}；拒绝：/df 拒绝支付 {reference}"
             )
             return "\n".join(lines)
         match = re.search(r"(\d+)", arg)
         if not match:
             return localized_text(language, "支付序号必须是数字，例如 /df 支付 1", "The payment number is required, for example /df confirm pay 1.")
-        index = int(match.group(1))
-        if index < 1 or index > len(payments):
+        reference = int(match.group(1))
+        payment = next((item for item in payments if self._payment_reference(item, 0) == reference), None)
+        if payment is None and 1 <= reference <= len(payments):
+            payment = payments[reference - 1]
+        if payment is None:
             return localized_text(language, "支付序号不存在。先发送 /df 支付 查看列表。", "That payment number does not exist. Send /df pay to view the list.")
-        payment = payments[index - 1]
         result = await self._client.resolve_payment(game_key, actor, str(payment.get("id") or ""), accepted)
-        if result.get("accepted"):
-            return localized_text(language, "支付已确认。", "Payment confirmed.")
-        return localized_text(language, "支付已拒绝。", "Payment rejected.")
+        if accepted and result.get("committed") is False:
+            return localized_text(language, "已记录你的确认，等待其他参与者。", "Your approval was recorded; waiting for the other contributors.")
+        if not payment.get("kind"):
+            return localized_text(language, "支付已确认。" if accepted else "支付已拒绝。", "Payment confirmed." if accepted else "Payment rejected.")
+        amount = int(payment.get("amount", 0) or 0)
+        reward = str(payment.get("kind") or "") == "reward"
+        return localized_text(language, f"已{'确认' if accepted else '拒绝'}{'奖励' if reward else '支付'} {amount} 金币。", f"{'Reward' if reward else 'Payment'} of {amount} gold {'confirmed' if accepted else 'rejected'}.")
 
     def _build_client(self) -> DiceFrameClient:
         cfg = self.config.diceframe
@@ -790,15 +809,38 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
 
     async def _pending_payments_for_actor(self, game_key: str, actor: str) -> list[dict[str, Any]]:
         detail = await self._client.detail(game_key, actor)
-        payments = detail.get("pending_payments") if isinstance(detail.get("pending_payments"), list) else []
+        canonical = detail.get("economy_proposals")
+        legacy = detail.get("pending_payments")
+        payments = canonical if isinstance(canonical, list) and canonical else legacy if isinstance(legacy, list) else canonical if isinstance(canonical, list) else []
         gm_uid = str(detail.get("gm_uid") or "")
-        result = []
-        for payment in payments:
-            if not isinstance(payment, dict):
-                continue
-            if actor == gm_uid or str(payment.get("uid") or "") == actor:
-                result.append(payment)
-        return result
+        return [item for item in payments if isinstance(item, dict) and str(item.get("status") or "pending") == "pending" and (
+            actor == gm_uid
+            or str(item.get("payer_uid") or item.get("uid") or "") == actor
+            or str(item.get("recipient_uid") or "") == actor
+            or actor in {str(c.get("uid") or "") for c in (item.get("contributors") or []) if isinstance(c, dict)}
+        )]
+
+    @staticmethod
+    def _pending_economy_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
+        canonical = result.get("economy_proposals")
+        legacy = result.get("pending_payments")
+        if isinstance(canonical, list) and canonical:
+            source = canonical
+        elif isinstance(legacy, list):
+            source = legacy
+        elif isinstance(canonical, list):
+            source = canonical
+        else:
+            source = []
+        return [item for item in source if isinstance(item, dict) and str(item.get("status") or "pending") == "pending"]
+
+    @staticmethod
+    def _payment_reference(payment: dict[str, Any], fallback: int) -> int:
+        try:
+            sequence = int(payment.get("sequence", 0) or 0)
+        except (TypeError, ValueError):
+            sequence = 0
+        return sequence if sequence > 0 else fallback
 
     async def _format_action_response(
         self,
@@ -860,7 +902,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
                             lines.append(text)
             except Exception:
                 pass
-        pending = result.get("pending_payments") if isinstance(result.get("pending_payments"), list) else []
+        pending = self._pending_economy_from_result(result)
         if pending:
             lines.append("Pending payments are available; send /df pay to review them." if english else "有待处理支付，发送 /df 支付 查看。")
         quick_actions = result.get("quick_actions") if isinstance(result.get("quick_actions"), list) else []
@@ -895,7 +937,7 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
                 if isinstance(item, dict)
             )
             lines.append(("Pending rolls resolved: " if english else "已自动处理待掷骰：") + roll_text)
-        pending = result.get("pending_payments") if isinstance(result.get("pending_payments"), list) else []
+        pending = self._pending_economy_from_result(result)
         if pending:
             lines.append("Pending payments are available; send /df pay to review them." if english else "有待处理支付，发送 /df 支付 查看。")
         quick_actions = result.get("quick_actions") if isinstance(result.get("quick_actions"), list) else []
@@ -1008,7 +1050,8 @@ class DiceFrameBridgePlugin(MaiBotPlugin):
         amount = int(payment.get("amount", 0) or 0)
         reason = str(payment.get("reason") or ("GM-requested payment" if english else "GM 建议支付")).strip()
         round_no = payment.get("round", "?")
-        return f"{index}. R{round_no} {amount} gold: {reason}" if english else f"{index}. R{round_no} {amount} 金币：{reason}"
+        reference = self._payment_reference(payment, index)
+        return f"#{reference} R{round_no} {amount} gold: {reason}" if english else f"#{reference} R{round_no} {amount} 金币：{reason}"
 
     def _help_text(self, language: str = DEFAULT_LANGUAGE) -> str:
         if is_english(language):
